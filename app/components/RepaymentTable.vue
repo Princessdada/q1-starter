@@ -15,17 +15,42 @@ const { data: customer } = await useFetch(`/api/customers/${props.customerId}`)
 const { data: summary } = await useFetch(`/api/customers/${props.customerId}/summary`)
 const { data: rates } = await useFetch('/api/rates')
 
-async function loadLoans() {
-  isLoading.value = true
-  const res = await $fetch('/api/loans', { params: { ...filters } })
-  loans.value = res.items
+let pollTimer = null
+let searchDebounce = null
 
-  for (const loan of loans.value) {
-    loan.schedule = await $fetch(`/api/loans/${loan.id}/schedule`)
+async function loadLoans(isInitial = false) {
+  if (isInitial) {
+    isLoading.value = true
   }
 
-  lastSyncedAt.value = new Date().toLocaleTimeString()
-  isLoading.value = false
+  try {
+    const res = await $fetch('/api/loans', { params: { ...filters } })
+    
+    const itemsWithSchedule = await Promise.all(
+      (res.items || []).map(async (loan) => {
+        try {
+          const schedule = await $fetch(`/api/loans/${loan.id}/schedule`)
+          return {
+            ...loan,
+            status: locallyPaidIds.value.has(loan.id) ? 'paid' : loan.status,
+            schedule
+          }
+        } catch {
+          return {
+            ...loan,
+            status: locallyPaidIds.value.has(loan.id) ? 'paid' : loan.status
+          }
+        }
+      })
+    )
+
+    loans.value = itemsWithSchedule
+    lastSyncedAt.value = new Date().toLocaleTimeString()
+  } catch (err) {
+    console.error('Failed to load loans:', err)
+  } finally {
+    isLoading.value = false
+  }
 }
 
 function handleResize() {
@@ -33,12 +58,33 @@ function handleResize() {
 }
 const isNarrow = ref(false)
 
-watch(filters, () => { loadLoans() }, { deep: true })
+watch(
+  filters,
+  () => {
+    if (searchDebounce) clearTimeout(searchDebounce)
+    searchDebounce = setTimeout(() => {
+      loadLoans(true)
+    }, 300)
+  },
+  { deep: true }
+)
 
 onMounted(() => {
-  loadLoans()
-  setInterval(loadLoans, 5000)
+  loadLoans(true)
+  pollTimer = setInterval(() => loadLoans(false), 5000)
   window.addEventListener('resize', handleResize)
+})
+
+onUnmounted(() => {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+  if (searchDebounce) {
+    clearTimeout(searchDebounce)
+    searchDebounce = null
+  }
+  window.removeEventListener('resize', handleResize)
 })
 
 const totalOutstanding = computed(() => {
