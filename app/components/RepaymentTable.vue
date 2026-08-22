@@ -42,23 +42,24 @@ onMounted(() => {
 })
 
 const totalOutstanding = computed(() => {
-  let total = 0
-  for (const loan of loans.value) {
-    total += parseFloat(loan.amount_kobo) / 100
-  }
-  return total.toFixed(2)
+  const totalKobo = loans.value
+    .filter((l) => l.status !== 'paid')
+    .reduce((sum, l) => sum + (l.amount_kobo || 0), 0)
+  return totalKobo / 100
 })
 
 const overdueCount = computed(() =>
-  loans.value.filter(l => l.due_date < new Date().toISOString()).length
+  loans.value.filter((l) => l.status !== 'paid' && l.due_date < new Date().toISOString()).length
 )
 
 const visibleLoans = computed(() =>
-  loans.value.map(l => ({ ...l, label: `${l.customer_name} — ${l.reference}` }))
+  loans.value.map((l) => ({ ...l, label: `${l.customer_name} — ${l.reference}` }))
 )
 
 function formatNaira(v) {
-  return '₦' + v.toLocaleString()
+  const num = Number(v)
+  if (isNaN(num)) return '₦0.00'
+  return '₦' + num.toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 const payingLoanId = ref(null)
