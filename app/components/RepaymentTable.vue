@@ -4,8 +4,12 @@ const props = defineProps({ customerId: String })
 const loans = ref([])
 const filters = reactive({ status: 'all', search: '' })
 const isLoading = ref(false)
-const expandedRow = ref(null)
+const selectedLoanId = ref(null)
 const lastSyncedAt = ref(new Date().toLocaleTimeString())
+
+const selectedLoan = computed(() =>
+  loans.value.find((l) => l.id === selectedLoanId.value)
+)
 
 const { data: customer } = await useFetch(`/api/customers/${props.customerId}`)
 const { data: summary } = await useFetch(`/api/customers/${props.customerId}/summary`)
@@ -107,7 +111,7 @@ async function pay(loan) {
 
     <table>
       <tbody>
-        <tr v-for="(loan, i) in visibleLoans" :key="i" @click="expandedRow = i">
+        <tr v-for="loan in visibleLoans" :key="loan.id" @click="selectedLoanId = loan.id">
           <td>{{ loan.label }}</td>
           <td>{{ loan.description }}</td>
           <td>{{ formatNaira(loan.amount_kobo / 100) }}</td>
@@ -125,12 +129,12 @@ async function pay(loan) {
       </tbody>
     </table>
 
-    <div v-if="expandedRow !== null" class="modal">
-      <div class="close" @click="expandedRow = null">×</div>
-      <h3>{{ visibleLoans[expandedRow].label }}</h3>
-      <p>Status: {{ visibleLoans[expandedRow].status }}</p>
-      <p>Due: {{ visibleLoans[expandedRow].schedule?.next_due }}</p>
-      <p>Installment: {{ formatNaira(visibleLoans[expandedRow].installment_amount_kobo / 100) }}</p>
+    <div v-if="selectedLoan" class="modal">
+      <div class="close" @click="selectedLoanId = null">×</div>
+      <h3>{{ selectedLoan.customer_name }} — {{ selectedLoan.reference }}</h3>
+      <p>Status: {{ selectedLoan.status }}</p>
+      <p>Due: {{ selectedLoan.schedule?.next_due }}</p>
+      <p>Installment: {{ formatNaira((selectedLoan.schedule?.installment_amount_kobo || 0) / 100) }}</p>
     </div>
   </div>
 </template>
