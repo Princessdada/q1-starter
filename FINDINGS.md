@@ -1,170 +1,91 @@
-<!--
-=============================================================================
-SCRATCH — DELETE THIS ENTIRE COMMENT BLOCK BEFORE SUBMITTING
-=============================================================================
-
-TRIAGE CHECKLIST (line numbers only — the diagnosis is yours to write)
-
-  script block
-  [ ] line 8         lastSyncedAt initialised at setup
-  [ ] lines 10-12    three sequential awaits
-  [ ] line 11        summary — is it used anywhere?
-  [ ] line 12        rates — is it used anywhere?
-  [ ] line 16        $fetch, no cancellation, no try/catch
-  [ ] lines 19-21    for...of with await inside
-  [ ] line 24        isLoading reset — reachable on every path?
-  [ ] lines 27-30    handleResize / isNarrow — consumed anywhere?
-  [ ] line 32        watch — fires how often?
-  [ ] line 36        setInterval — return value discarded
-  [ ] line 37        addEventListener — ever removed?
-  [ ] lines 40-46    totalOutstanding
-  [ ] lines 48-50    overdueCount
-  [ ] lines 52-54    visibleLoans — spread copies
-  [ ] lines 56-58    formatNaira — type sensitivity
-  [ ] lines 60-63    pay
-
-  template
-  [ ] line 71        formatNaira(totalOutstanding)
-  [ ] line 74        v-model, no debounce
-  [ ] line 76        v-if isLoading, no v-else, no empty state
-  [ ] line 80        :key="i" + expandedRow = i
-  [ ] line 82        v-html
-  [ ] line 83        decimal padding
-  [ ] line 86        <div> not <button>, pay(copy)
-  [ ] line 92        expandedRow !== null   <-- decoy candidate, do NOT "fix"
-  [ ] lines 94-97    unguarded index access
-  [ ] line 97        installment_amount_kobo property path
-
-ORDERING RULE (from the brief): rank by DAMAGE TO A REAL USER, not by line
-number and not by how clever the bug is. A useful tiebreaker ladder:
-
-  1. wrong money / lost money      (finance acts on it, or a payment vanishes)
-  2. security                      (executes attacker code in an authed session)
-  3. wrong data shown as right     (user acts on the wrong customer)
-  4. crashes / dead UI             (user is blocked, but knows they are)
-  5. performance / resource leak   (annoying, degrades over hours)
-  6. cosmetic / formatting         (noticed, not acted on)
-
-Be ready to DEFEND the order out loud. They mark the reasoning, not the list.
-
-=============================================================================
--->
-
 # FINDINGS — Question 1
 
-**Candidate:** <your name>
-**Time spent:** <hours>
+**Candidate:** Princess Dada  
+**Time spent:** 4 hours  
 **Repo:** commit history documents each fix individually; see `git log`.
 
 ---
 
 ## Bugs I found and fixed
 
-<!--
-Ordered by damage to a real user, most damaging first.
-Use the README's exact per-bug format. Keep each one to ~5 lines.
-Reference line numbers from the ORIGINAL file so the reviewer can follow.
--->
+### 1. Unhandled payment processor failures (502), race conditions, and lack of loading states
+- **Severity:** Critical
+- **Who it hurts and how:** Ops team and customers. When `/api/loans/:id/repay` fails (with a 502), no error is caught or shown. The operator is left unsure whether the payment went through. Without button disabling, rapid clicks trigger duplicate repayment requests.
+- **Cause:** Lines 60–63 (`pay` function) called `$fetch` with no `try/catch`, no in-flight loading state (`payingLoanId`), and mutated a shallow copy whose state was overwritten on subsequent polls.
+- **My fix:** Wrapped `pay(loan)` in `try/catch/finally`, tracked in-flight state with `payingLoanId` to disable the button and show "Paying…", displayed user-facing alerts/error banners on failure, and preserved locally paid status across 5s polls.
+- **Commit:** `f5c8ff7`
 
-### 1. [One-line description]
-- **Severity:** Critical / High / Medium / Low
-- **Who it hurts and how:**
-- **Cause:**
-- **My fix:**
-- **Commit:** `<sha>`
+### 2. Stored Cross-Site Scripting (XSS) vulnerability in loan description
+- **Severity:** High
+- **Who it hurts and how:** Internal operations and finance team. Malicious loan descriptions (e.g., loan `ln_05` containing `<img src=x onerror="...">`) execute arbitrary JavaScript within authenticated staff browser sessions, creating risks of session hijacking and unauthorized actions.
+- **Cause:** Line 82 rendered loan descriptions using Vue's unescaped HTML directive `<td v-html="loan.description"></td>`.
+- **My fix:** Replaced `v-html` with safe plain text interpolation `<td>{{ loan.description }}</td>`.
+- **Commit:** `d249239`
 
-### 2. [One-line description]
-- **Severity:**
-- **Who it hurts and how:**
-- **Cause:**
-- **My fix:**
-- **Commit:** `<sha>`
+### 3. Modal row desynchronization on search/filter and NaN installment amount
+- **Severity:** High
+- **Who it hurts and how:** Ops team (Ops Complaint #2). Clicking a row and then searching or filtering caused the modal to display a completely different customer's loan details. Additionally, the modal installment displayed as `₦NaN`.
+- **Cause:** Line 80 and 92–98 tracked active modal row by array index (`expandedRow = i`). Filtering modified `visibleLoans` order/length, shifting indices. Line 97 also attempted to access `installment_amount_kobo` directly on `loan` instead of `loan.schedule.installment_amount_kobo`.
+- **My fix:** Changed state tracking to `selectedLoanId = ref(null)` by unique loan ID with `:key="loan.id"`, derived `selectedLoan` via computed lookup, and accessed installment via `selectedLoan.schedule?.installment_amount_kobo`.
+- **Commit:** `322f6e8`
 
-### 3. [One-line description]
-- **Severity:**
-- **Who it hurts and how:**
-- **Cause:**
-- **My fix:**
-- **Commit:** `<sha>`
+### 4. Total outstanding balance sums paid loans, uses floating-point arithmetic, and lacks comma formatting
+- **Severity:** Medium
+- **Who it hurts and how:** Finance and Ops team (Ops Complaint #3). The top summary included paid loans in the outstanding total, suffered floating-point rounding inaccuracies, and omitted comma separators (e.g. `₦3500435.94`).
+- **Cause:** Lines 40–46 summed all 25 loans regardless of status using `parseFloat(loan.amount_kobo) / 100` iteratively. Calling `.toLocaleString()` on the resulting string in `formatNaira` produced no comma separators.
+- **My fix:** Filtered `loans` to exclude `status === 'paid'` loans, summed integer kobo before dividing by 100 once, and updated `formatNaira` to parse numeric values and format using `toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })`.
+- **Commit:** `c0f4bbc`
 
-### 4. [One-line description]
-- **Severity:**
-- **Who it hurts and how:**
-- **Cause:**
-- **My fix:**
-- **Commit:** `<sha>`
-
-### 5. [One-line description]
-- **Severity:**
-- **Who it hurts and how:**
-- **Cause:**
-- **My fix:**
-- **Commit:** `<sha>`
-
-<!-- add or remove numbered entries as needed -->
+### 5. Interval/listener memory leaks, blocking N+1 schedule requests, and un-debounced search
+- **Severity:** Medium
+- **Who it hurts and how:** Ops team leaving the dashboard open all day (Ops Complaint #1). Causes cumulative memory leaks, runaway background timers on HMR/remount, and sluggish UI / CPU fans spinning.
+- **Cause:** Lines 34–38 initiated `setInterval(loadLoans, 5000)` and `addEventListener('resize')` without cleaning them up in `onUnmounted`. Inside `loadLoans`, a sequential `for...of` loop made 25 blocking `$fetch` calls one-by-one per tick.
+- **My fix:** Stored interval ID and removed it along with the resize listener in `onUnmounted()`. Replaced sequential loop with parallel `Promise.all()` fetches, prevented `isLoading` full-screen flash on background ticks, and added 300ms debounce to filter watching.
+- **Commit:** `1918ea1`
 
 ---
 
 ## Things I noticed but deliberately did not fix
 
-<!--
-At least two. This section carries real marks — it is not filler.
-Aim for a mix:
-  - the decoy (something that looks wrong and is correct)
-  - something real but out of scope, where fixing it would break a stated rule
-  - something real but not worth the risk/effort inside the time budget
-For each, say what you would do if it were your call and you had more time.
--->
+### 1. `expandedRow !== null` check in modal conditional
+- **Why I left it (Decoy):** While `v-if="expandedRow"` might look more concise, index `0` is falsy in JavaScript. In an index-based setup, `v-if="expandedRow"` would fail to render the modal for the first item in the list (`i = 0`). Even after migrating to ID-based selection (`v-if="selectedLoan"`), recognizing why this strict null check existed in the original code was critical.
 
-### [What it is]
-- **Why I left it:**
+### 2. Top-level sequential `useFetch` calls in `<script setup>`
+- **Why I left it:** Lines 10–12 execute top-level `useFetch` for customer, summary, and rates. While they could theoretically be wrapped in a single combined call or parallelized, Nuxt 4's Suspense integration handles top-level `useFetch` efficiently on initial page load, and the brief explicitly cautions against rewriting setup or changing backend contracts without strong justification.
 
-### [What it is]
-- **Why I left it:**
-
-### [What it is]
-- **Why I left it:**
+### 3. Fetching `/api/rates` at setup
+- **Why I left it:** The rates endpoint is fetched on line 12 but not rendered in the template. I left the fetch intact to avoid breaking any potential prop/component contracts expected by parent wrappers while keeping the fix scoped strictly to operational bugs.
 
 ---
 
 ## A note on the finance figure
 
-<!--
-Replace this comment with your own words if you agree with the finding.
-Verify the arithmetic yourself before you assert it — do not take it on trust.
+The finance figure quoted in the ops complaint was **₦3,511,152.18**.
 
-  Sum of all 25 loans           = 368,942,759 kobo = N3,689,427.59
-  Sum excluding 'paid' (23)     = 350,043,594 kobo = N3,500,435.94
-  Figure quoted in the brief    =                    N3,511,152.18
+When verifying against the 25 seed loans in `server/utils/data.ts`:
+- **Sum of all 25 loans:** 368,942,759 kobo = **₦3,689,427.59**
+- **Sum excluding 'paid' loans (loans `ln_10` & `ln_16`):** 350,043,594 kobo = **₦3,500,435.94**
+- **Gap between unpaid total and quoted figure:** ₦10,716.24 (which does not correlate to any combination of seed loan items or rates).
 
-  Neither total reconciles with the quoted figure; the gap is N10,716.24
-  and does not correspond to any subset of the seed data or to the rates
-  returned by /api/rates.
-
-  /api/customers/:id/summary marks outstanding_kobo as the authoritative
-  figure ("the finance export uses this"), so I used that field rather
-  than tuning the UI to match a target number I could not derive.
--->
+The backend route `/api/customers/:id/summary` explicitly identifies `outstanding_kobo` (350,043,594 kobo = **₦3,500,435.94**) as the authoritative figure used by the finance export. I calculated the total by summing unpaid active/overdue loans in integer kobo, reconciling directly with the authoritative backend calculation.
 
 ---
 
 ## Where I used AI
 
-<!--
-Be specific and be honest. Name the tool, what you asked for, and at least
-one place you rejected or rewrote its output and why.
-Vague entries ("used AI for help") score nothing.
--->
-
-- **Tool:**
-- **What I used it for:**
-- **What I rejected or rewrote, and why:**
+- **Tool:** Antigravity (Pair Programming AI Assistant)
+- **What I used it for:** 
+  - Validating Nuxt 4 lifecycle and HMR timer accumulation behavior.
+  - Double-checking integer kobo arithmetic and edge cases for the 25 seed loans.
+  - Brainstorming severity hierarchy according to the "Damage to a real user" framework.
+- **What I rejected or rewrote, and why:** 
+  - I rejected an initial suggestion to alter `server/api/loans/[id]/repay.post.ts` to mutate backend seed data directly. The brief specifically instructs: *"Do not change the mock API to work around a frontend problem without saying so and defending it."* Instead, I handled state persistence and optimism directly on the frontend within `RepaymentTable.vue`.
+  - I rejected rewriting the component from scratch and instead performed surgical, targeted fixes per the rubric.
 
 ---
 
 ## What I would do next
 
-<!--
-If you ran out of time, say what remains and why you stopped.
-The brief explicitly says knowing when to stop is part of the assessment.
--->
+1. **Automated Component Tests:** Write Vitest + Vue Test Utils tests simulating 502 repayment errors, debounced filter queries, and modal loan ID binding.
+2. **Virtualization for Scale:** If loan records expand beyond 25 to hundreds or thousands, integrate virtualized scrolling (e.g. `@tanstack/vue-virtual`) to maintain 60fps performance.
+3. **Accessibility (a11y):** Add proper ARIA attributes (`role="dialog"`, `aria-modal="true"`, focus trapping) to the loan details modal.
