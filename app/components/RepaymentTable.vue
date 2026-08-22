@@ -57,9 +57,31 @@ function formatNaira(v) {
   return '₦' + v.toLocaleString()
 }
 
+const payingLoanId = ref(null)
+const actionError = ref('')
+const actionSuccess = ref('')
+const locallyPaidIds = ref(new Set())
+
 async function pay(loan) {
-  await $fetch(`/api/loans/${loan.id}/repay`, { method: 'POST' })
-  loan.status = 'paid'
+  if (payingLoanId.value || loan.status === 'paid') return
+  payingLoanId.value = loan.id
+  actionError.value = ''
+  actionSuccess.value = ''
+
+  try {
+    await $fetch(`/api/loans/${loan.id}/repay`, { method: 'POST' })
+    locallyPaidIds.value.add(loan.id)
+    const target = loans.value.find((l) => l.id === loan.id)
+    if (target) {
+      target.status = 'paid'
+    }
+    actionSuccess.value = `Repayment of ${loan.reference} (${loan.customer_name}) posted successfully!`
+  } catch (err) {
+    const errorMsg = err?.data?.statusMessage || err?.data?.message || err?.message || 'Payment processor unavailable'
+    actionError.value = `Failed to process repayment for ${loan.reference}: ${errorMsg}`
+  } finally {
+    payingLoanId.value = null
+  }
 }
 </script>
 
@@ -70,6 +92,14 @@ async function pay(loan) {
       <p>{{ customer?.branch }} · Last synced: {{ lastSyncedAt }}</p>
       <p>{{ overdueCount }} overdue · Total outstanding {{ formatNaira(totalOutstanding) }}</p>
     </header>
+
+    <div v-if="actionSuccess" style="color: #059669; font-weight: 500; margin-bottom: 8px;">
+      ✓ {{ actionSuccess }}
+    </div>
+
+    <div v-if="actionError" style="color: #dc2626; font-weight: 500; margin-bottom: 8px;">
+      ⚠ {{ actionError }}
+    </div>
 
     <input v-model="filters.search" placeholder="Search customer or reference" />
 
@@ -83,7 +113,13 @@ async function pay(loan) {
           <td>{{ formatNaira(loan.amount_kobo / 100) }}</td>
           <td>{{ loan.schedule?.next_due }}</td>
           <td>
-            <div class="btn" @click.stop="pay(loan)">Pay</div>
+            <button
+              class="btn"
+              :disabled="payingLoanId === loan.id || loan.status === 'paid'"
+              @click.stop="pay(loan)"
+            >
+              {{ payingLoanId === loan.id ? 'Paying…' : loan.status === 'paid' ? 'Paid' : 'Pay' }}
+            </button>
           </td>
         </tr>
       </tbody>
