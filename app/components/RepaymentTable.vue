@@ -109,7 +109,7 @@ async function pay(loan) {
       <tbody>
         <tr v-for="(loan, i) in visibleLoans" :key="i" @click="expandedRow = i">
           <td>{{ loan.label }}</td>
-          <td v-html="loan.description"></td>
+          <td>{{ loan.description }}</td>
           <td>{{ formatNaira(loan.amount_kobo / 100) }}</td>
           <td>{{ loan.schedule?.next_due }}</td>
           <td>
