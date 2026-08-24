@@ -32,13 +32,13 @@ async function loadLoans(isInitial = false) {
           const schedule = await $fetch(`/api/loans/${loan.id}/schedule`)
           return {
             ...loan,
-            status: locallyPaidIds.value.has(loan.id) ? 'paid' : loan.status,
+            status: locallyPaid.value.has(loan.id) ? 'paid' : loan.status,
             schedule
           }
         } catch {
           return {
             ...loan,
-            status: locallyPaidIds.value.has(loan.id) ? 'paid' : loan.status
+            status: locallyPaid.value.has(loan.id) ? 'paid' : loan.status
           }
         }
       })
@@ -88,10 +88,19 @@ onUnmounted(() => {
 })
 
 const totalOutstanding = computed(() => {
-  const totalKobo = loans.value
-    .filter((l) => l.status !== 'paid')
-    .reduce((sum, l) => sum + (l.amount_kobo || 0), 0)
-  return totalKobo / 100
+  // Page-level figure: it must cover every open loan, not just the rows that
+  // currently match the search. summary.outstanding_kobo is computed server-side
+  // over the full set, in integer kobo, and summary.get.ts documents it as the
+  // figure the finance export uses.
+  const base = summary.value?.outstanding_kobo ?? 0
+
+  // /api/loans/:id/repay acknowledges a payment but does not persist it, so
+  // anything paid in this session is still counted inside `base`. Subtract it,
+  // or the header would not respond to a payment the operator just made.
+  let paidKobo = 0
+  for (const amount of locallyPaid.value.values()) paidKobo += amount
+
+  return (base - paidKobo) / 100
 })
 
 const overdueCount = computed(() =>
@@ -111,7 +120,10 @@ function formatNaira(v) {
 const payingLoanId = ref(null)
 const actionError = ref('')
 const actionSuccess = ref('')
-const locallyPaidIds = ref(new Set())
+// loan id -> amount_kobo captured at the moment of payment. A Map rather than a
+// Set because the amount is still needed after the row has been filtered out of
+// loans.value, when the loan object is no longer in scope to read it from.
+const locallyPaid = ref(new Map())
 
 async function pay(loan) {
   if (payingLoanId.value || loan.status === 'paid') return
@@ -121,7 +133,7 @@ async function pay(loan) {
 
   try {
     await $fetch(`/api/loans/${loan.id}/repay`, { method: 'POST' })
-    locallyPaidIds.value.add(loan.id)
+    locallyPaid.value.set(loan.id, loan.amount_kobo || 0)
     const target = loans.value.find((l) => l.id === loan.id)
     if (target) {
       target.status = 'paid'
