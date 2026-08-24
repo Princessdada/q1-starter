@@ -18,7 +18,14 @@ const { data: rates } = await useFetch('/api/rates')
 let pollTimer = null
 let searchDebounce = null
 
+// Incremented once per request. Only the newest request is allowed to write to
+// loans.value: /api/loans is deliberately slower for shorter search terms, so a
+// broad earlier request routinely resolves after a narrower later one. Debounce
+// controls when requests start, not the order in which they finish.
+let requestSeq = 0
+
 async function loadLoans(isInitial = false) {
+  const seq = ++requestSeq
   if (isInitial) {
     isLoading.value = true
   }
@@ -44,12 +51,16 @@ async function loadLoans(isInitial = false) {
       })
     )
 
+    if (seq !== requestSeq) return // superseded by a newer request — drop this result
     loans.value = itemsWithSchedule
     lastSyncedAt.value = new Date().toLocaleTimeString()
   } catch (err) {
+    if (seq !== requestSeq) return
     console.error('Failed to load loans:', err)
   } finally {
-    isLoading.value = false
+    // guarded too: a late superseded request must not clear the spinner while
+    // the request that replaced it is still in flight
+    if (seq === requestSeq) isLoading.value = false
   }
 }
 
