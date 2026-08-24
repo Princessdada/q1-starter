@@ -20,6 +20,7 @@
 - **Who it hurts and how:** Finance and Ops (Ops Complaint #3). The header figure reads as a page-level total but was silently re-scoped to whatever the operator had typed, so it shrank as they searched — finance could take a number off this screen that was only ever a subtotal. It also counted paid loans, accumulated floating-point error, and rendered without separators (`₦3500435.94`), which is the "doesn't look like the numbers in the table" half of the complaint.
 - **Cause:** `/api/loans` applies `search` and `status` server-side, so `loans.value` only ever held the filtered subset — yet lines 40–46 reduced over it, dividing each loan by 100 before summing rather than summing integer kobo once. `summary.outstanding_kobo` was fetched at line 11 and never read. `formatNaira` called `.toLocaleString()` on a string — `String.prototype.toLocaleString` returns the string unchanged, so no thousand separators were ever added.
 - **My fix:** The total now comes from `summary.outstanding_kobo`, which the server computes over the full loan set in integer kobo and documents as the figure the finance export uses. Because `/api/loans/:id/repay` acknowledges a payment without persisting it, loans paid during the session are still inside that figure, so `locallyPaid` was widened from a `Set` of ids to a `Map` of id → `amount_kobo` and those amounts are subtracted — the amount is captured at payment time so the subtraction survives the row being filtered out of view. `formatNaira` now coerces to `Number` before formatting.
+- **The quoted ₦3,511,152.18:** I could not derive it from the seed data. All 25 loans sum to 368,942,759 kobo (₦3,689,427.59), the unpaid ones to 350,043,594 kobo (₦3,500,435.94), and the ₦10,716.24 gap to the quoted figure matches no subset of the seed loans and no rate from `/api/rates`. So I did not tune the UI to hit it: the header takes the authoritative server figure, which agrees with my own sum of the unpaid loans. If finance is genuinely seeing ₦3,511,152.18, the discrepancy is upstream of this screen and I would raise it against the export rather than the dashboard.
 - **Commits:** `c0f4bbc`, `dffba6c`
 
 ### 3. Stored Cross-Site Scripting (XSS) vulnerability in loan description
@@ -72,18 +73,8 @@
 ### 6. The N+1 schedule fetch is parallel, but still N+1
 - **Why I left it:** Every poll still issues 25 concurrent `/api/loans/:id/schedule` requests, one per row. `Promise.all` removed the blocking, not the request count. Collapsing it properly needs a batch endpoint that does not exist, and the README states the ~150ms per-row lookup is realistic and intended. At 25 rows this is acceptable; at 500 it would not be, and that is the point at which I would ask for the batch route.
 
----
-
-## A note on the finance figure
-
-The figure quoted in the ops complaint was **₦3,511,152.18**.
-
-Checking it against the 25 seed loans in `server/utils/data.ts`:
-- **Sum of all 25 loans:** 368,942,759 kobo = **₦3,689,427.59**
-- **Sum excluding 'paid' loans:** 350,043,594 kobo = **₦3,500,435.94**
-- **Gap between the unpaid total and the quoted figure:** ₦10,716.24, which does not correspond to any subset of the seed loans or to the rates returned by `/api/rates`.
-
-I could not derive the quoted number from the data, so I did not tune the UI to hit it. `/api/customers/:id/summary` computes `outstanding_kobo` in integer kobo over the full loan set and its own comment identifies it as the figure the finance export uses, so I took the header total from there and cross-checked that it agrees with my own sum of the unpaid loans (350,043,594 kobo). If finance is genuinely seeing ₦3,511,152.18, the discrepancy is upstream of this screen and I would raise it against the export rather than the dashboard.
+### 7. The table's mouse-only rows and bare modal
+- **Why I left it:** Rows open the modal on click only, and the modal has no `role="dialog"`, no `aria-modal`, no focus trap, and no Escape handling — real accessibility gaps, and I want it on record that I saw them. Fixing them properly means changing the component's interaction semantics and markup (focusable rows, key handlers, focus management), which is a feature-sized diff on a bug-fix exercise, not a targeted repair. It is the first thing I would ticket after this branch lands.
 
 ---
 
@@ -102,11 +93,3 @@ I could not derive the quoted number from the data, so I did not tune the UI to 
   - Claude flagged the ISO-string date comparison in `overdueCount` as the likely planted decoy. I judged the `!== null` modal guard the stronger candidate, kept my own choice as the decoy entry, and documented the date comparison as a separate left-alone item instead.
   - I rejected Antigravity's suggestion to alter `server/api/loans/[id]/repay.post.ts` to mutate backend seed data directly. The brief specifically instructs: *"Do not change the mock API to work around a frontend problem without saying so and defending it."* Instead, I handled state persistence and optimism directly on the frontend within `RepaymentTable.vue`.
   - I rejected rewriting the component from scratch and instead performed surgical, targeted fixes per the rubric.
-
----
-
-## What I would do next
-
-1. **Automated Component Tests:** Write Vitest + Vue Test Utils tests simulating 502 repayment errors, out-of-order search responses, and modal loan ID binding.
-2. **Virtualization for Scale:** If loan records expand beyond 25 to hundreds or thousands, integrate virtualized scrolling (e.g. `@tanstack/vue-virtual`) to maintain 60fps performance — and request the batch schedule endpoint noted above.
-3. **Accessibility (a11y):** Add proper ARIA attributes (`role="dialog"`, `aria-modal="true"`, focus trapping) to the loan details modal, and make the table rows keyboard-activatable rather than click-only.
