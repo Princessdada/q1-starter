@@ -18,7 +18,7 @@
 ### 2. Outstanding total is scoped to the filtered list, counts paid loans, and loses precision
 - **Severity:** High
 - **Who it hurts and how:** Finance and Ops (Ops Complaint #3). The header figure reads as a page-level total but was silently re-scoped to whatever the operator had typed, so it shrank as they searched — finance could take a number off this screen that was only ever a subtotal. It also counted paid loans, accumulated floating-point error, and rendered without separators (`₦3500435.94`), which is the "doesn't look like the numbers in the table" half of the complaint.
-- **Cause:** `/api/loans` applies `search` and `status` server-side, so `loans.value` only ever held the filtered subset — yet lines 40–46 reduced over it, dividing each loan by 100 before summing rather than summing integer kobo once. `summary.outstanding_kobo` was fetched at line 11 and never read. `formatNaira` called `.toLocaleString()` on a string, which resolves to `String.prototype.toLocaleString` and ignores the options object entirely.
+- **Cause:** `/api/loans` applies `search` and `status` server-side, so `loans.value` only ever held the filtered subset — yet lines 40–46 reduced over it, dividing each loan by 100 before summing rather than summing integer kobo once. `summary.outstanding_kobo` was fetched at line 11 and never read. `formatNaira` called `.toLocaleString()` on a string — `String.prototype.toLocaleString` returns the string unchanged, so no thousand separators were ever added.
 - **My fix:** The total now comes from `summary.outstanding_kobo`, which the server computes over the full loan set in integer kobo and documents as the figure the finance export uses. Because `/api/loans/:id/repay` acknowledges a payment without persisting it, loans paid during the session are still inside that figure, so `locallyPaid` was widened from a `Set` of ids to a `Map` of id → `amount_kobo` and those amounts are subtracted — the amount is captured at payment time so the subtraction survives the row being filtered out of view. `formatNaira` now coerces to `Number` before formatting.
 - **Commits:** `c0f4bbc`, `dffba6c`
 
@@ -63,10 +63,13 @@
 ### 3. The unused `/api/rates` fetch
 - **Why I left it:** It is dead weight — one request on every page load whose result is never read. I left it because an unused fetch sitting alongside two used ones reads like scaffolding for work in progress, and quietly deleting a teammate's half-finished feature on a bug-fix branch is not my call. I would raise it in review. If it is genuinely orphaned, removing it is a one-line win.
 
-### 4. `overdueCount` has the same filter-scope problem as the outstanding total
-- **Why I left it:** It reduces over `loans.value`, so like the total it is scoped to the current search rather than to the page. I could not fix it the same way: `/api/customers/:id/summary` exposes `open_loans` but no overdue count, and `/api/loans` cannot be asked for an unfiltered set alongside a filtered one without a second round trip on every keystroke — which would work against the fix in commit `1918ea1`. Rather than add a request per keystroke, or change the mock API to suit the frontend, I left it and would ask the backend for an `overdue_count` field on the summary endpoint.
+### 4. The dead `isNarrow` / `handleResize` pair
+- **Why I left it:** Commit `1918ea1` fixed the leak — the resize listener is now removed on unmount — but the ref and handler themselves remain, and nothing in the template reads `isNarrow`. Like the rates fetch, it reads as scaffolding for an unfinished responsive feature, so deleting it is a review conversation rather than a bug fix. The harm (the leak) is gone; the dead weight is a couple of lines.
 
-### 5. The N+1 schedule fetch is parallel, but still N+1
+### 5. `overdueCount` has the same filter-scope problem as the outstanding total
+- **Why I left it:** It reduces over `loans.value`, so like the total it is scoped to the current search rather than to the page. I did narrow its predicate while fixing the payment flow — a loan marked paid no longer counts as overdue merely because its due date is in the past — but the scoping I left. I could not fix it the same way as the total: `/api/customers/:id/summary` exposes `open_loans` but no overdue count, and `/api/loans` cannot be asked for an unfiltered set alongside a filtered one without a second round trip on every keystroke — which would work against the fix in commit `1918ea1`. Rather than add a request per keystroke, or change the mock API to suit the frontend, I left it and would ask the backend for an `overdue_count` field on the summary endpoint. One more thing in this computed looks like a bug and is not: comparing `due_date` to `new Date().toISOString()` with `<` is safe, because same-format ISO-8601 UTC strings sort lexicographically in date order.
+
+### 6. The N+1 schedule fetch is parallel, but still N+1
 - **Why I left it:** Every poll still issues 25 concurrent `/api/loans/:id/schedule` requests, one per row. `Promise.all` removed the blocking, not the request count. Collapsing it properly needs a batch endpoint that does not exist, and the README states the ~150ms per-row lookup is realistic and intended. At 25 rows this is acceptable; at 500 it would not be, and that is the point at which I would ask for the batch route.
 
 ---
@@ -86,13 +89,18 @@ I could not derive the quoted number from the data, so I did not tune the UI to 
 
 ## Where I used AI
 
-- **Tool:** Antigravity (Pair Programming AI Assistant)
-- **What I used it for:** 
+- **Tools:** Claude Code (Anthropic) and Antigravity, at different stages.
+- **What I used Claude Code for:**
+  - Guided diagnosis of the three ops complaints — it pointed me at the unused `summary` fetch behind the total, at the request-ordering mechanism behind the stale search results, and at the experiment (watching the browser tab title) that exposed the XSS payload in `ln_05`.
+  - Independently verifying the finance figure against the seed data; the kobo sums in the note above come from that check, and I re-ran the arithmetic before asserting it here.
+  - Implementation help on the stale-response guard (`c5e0d63`) and the summary-based total (`dffba6c`), including their commit messages, and a final review of this document against the code.
+- **What I used Antigravity for:**
   - Validating Nuxt 4 lifecycle and HMR timer accumulation behavior.
   - Double-checking integer kobo arithmetic and edge cases for the 25 seed loans.
   - Brainstorming severity hierarchy according to the "Damage to a real user" framework.
 - **What I rejected or rewrote, and why:** 
-  - I rejected an initial suggestion to alter `server/api/loans/[id]/repay.post.ts` to mutate backend seed data directly. The brief specifically instructs: *"Do not change the mock API to work around a frontend problem without saying so and defending it."* Instead, I handled state persistence and optimism directly on the frontend within `RepaymentTable.vue`.
+  - Claude flagged the ISO-string date comparison in `overdueCount` as the likely planted decoy. I judged the `!== null` modal guard the stronger candidate, kept my own choice as the decoy entry, and documented the date comparison as a separate left-alone item instead.
+  - I rejected Antigravity's suggestion to alter `server/api/loans/[id]/repay.post.ts` to mutate backend seed data directly. The brief specifically instructs: *"Do not change the mock API to work around a frontend problem without saying so and defending it."* Instead, I handled state persistence and optimism directly on the frontend within `RepaymentTable.vue`.
   - I rejected rewriting the component from scratch and instead performed surgical, targeted fixes per the rubric.
 
 ---
